@@ -65,6 +65,20 @@ def calib_label_for_video(video_path: Path) -> str:
     return "camera-rgb"
 
 
+def rotate_gaze_cw90(
+    xy: Tuple[float, float],
+    calib_wh: Tuple[float, float],
+) -> Tuple[Tuple[float, float], Tuple[float, float]]:
+    """Map VRS/calib RGB pixels onto Ego-Exo4D frame-aligned Aria RGB.
+
+    Those mp4s are stored 90° clockwise from the camera-rgb calibration frame.
+    Official tutorial: ``x' = width - 1 - y; y' = x``.
+    """
+    x, y = xy
+    width, height = float(calib_wh[0]), float(calib_wh[1])
+    return (height - 1.0 - y, x), (height, width)
+
+
 def scale_gaze(
     xy: Tuple[float, float],
     calib_wh: Tuple[float, float],

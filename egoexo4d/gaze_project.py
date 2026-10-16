@@ -11,6 +11,8 @@ from typing import Dict, List, Optional, Tuple
 import cv2
 import numpy as np
 
+from egoexo4d.media import rotate_gaze_cw90
+
 
 def _first_existing(root: Path, relatives: Tuple[str, ...]) -> Optional[Path]:
     for rel in relatives:
@@ -293,16 +295,48 @@ class GazeProjector:
         gaze_vector_in_cpf = np.nan_to_num(gaze_vector_in_cpf)
         return self._device_calib, self._T_device_CPF @ gaze_vector_in_cpf
 
+    def _camera_image_size(self, cam) -> Tuple[float, float]:
+        try:
+            size = cam.get_image_size()
+            return float(size[0]), float(size[1])
+        except Exception:
+            return (
+                float(getattr(cam, "get_image_width", lambda: 0)() or 0),
+                float(getattr(cam, "get_image_height", lambda: 0)() or 0),
+            )
+
+    def _rgb_camera_calib(self, ts: int, calib_label: str):
+        """Prefer MPS online RGB calib (native 1408) over noimagestreams 2880."""
+        getter = getattr(self._mps, "get_online_calibration", None)
+        if callable(getter):
+            try:
+                online = getter(ts)
+            except Exception:
+                online = None
+            if online is not None:
+                for cam in getattr(online, "camera_calibs", None) or []:
+                    try:
+                        if cam.get_label() == calib_label:
+                            return cam
+                    except Exception:
+                        continue
+        if self._device_calib is None:
+            return None
+        return self._device_calib.get_camera_calib(calib_label)
+
     def project_ego_gaze(
         self,
         frame_idx: int,
         timestamp_cam: str,
         calib_label: str = "camera-rgb",
+        *,
+        upright: bool = True,
     ) -> Optional[Tuple[float, float, Tuple[float, float]]]:
         """Project MPS gaze onto an Aria camera.
 
-        Returns ``(x, y, (calib_w, calib_h))`` in the calibration pixel frame,
-        or None if unavailable. Callers should scale to the decoded video size.
+        Returns ``(x, y, (calib_w, calib_h))``. With ``upright=True`` (default)
+        coordinates are in the Ego-Exo4D frame-aligned RGB frame (90° CW from
+        VRS). Callers should still scale to the decoded video size.
         """
         ts = self.frame_to_timestamp_ns(frame_idx, timestamp_cam)
         if ts is None:
@@ -310,8 +344,8 @@ class GazeProjector:
         packed = self._eyegaze_in_device(ts)
         if packed is None:
             return None
-        device_calib, gaze_in_device = packed
-        rgb_cam = device_calib.get_camera_calib(calib_label)
+        _device_calib, gaze_in_device = packed
+        rgb_cam = self._rgb_camera_calib(ts, calib_label)
         if rgb_cam is None:
             return None
         T_device_cam = rgb_cam.get_transform_device_camera()
@@ -319,15 +353,11 @@ class GazeProjector:
         projection = rgb_cam.project(gaze_in_cam)
         if projection is None:
             return None
-        try:
-            size = rgb_cam.get_image_size()
-            cal_wh = (float(size[0]), float(size[1]))
-        except Exception:
-            cal_wh = (
-                float(getattr(rgb_cam, "get_image_width", lambda: 0)() or 0),
-                float(getattr(rgb_cam, "get_image_height", lambda: 0)() or 0),
-            )
-        return float(projection[0]), float(projection[1]), cal_wh
+        cal_wh = self._camera_image_size(rgb_cam)
+        x, y = float(projection[0]), float(projection[1])
+        if upright:
+            (x, y), cal_wh = rotate_gaze_cw90((x, y), cal_wh)
+        return x, y, cal_wh
 
 
 @lru_cache(maxsize=64)
