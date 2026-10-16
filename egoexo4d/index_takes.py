@@ -4,20 +4,49 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Dict, List, Set
+from typing import Any, Dict, List
 
 from egoexo4d.paths import egoexo_root, manifests_dir, relations_path, takes_json_path
+
+
+def unwrap_relations_dict(data: Any) -> Dict[str, dict]:
+    """Official files are ``{"annotations": {take_uid: {...}}}`` (see EgoExo_Relations.ipynb)."""
+    if not isinstance(data, dict) or not data:
+        return {}
+    inner = data.get("annotations")
+    if isinstance(inner, dict) and inner:
+        sample = next(iter(inner.values()))
+        if isinstance(sample, dict):
+            return {str(k): v for k, v in inner.items() if isinstance(v, dict)}
+    if any(
+        isinstance(v, dict) and ("object_masks" in v or "object_names" in v or "take_name" in v)
+        for v in data.values()
+    ):
+        return {str(k): v for k, v in data.items() if isinstance(v, dict)}
+    return {}
+
+
+def _text_looks_cooking(*parts: Any) -> bool:
+    blob = " ".join(str(p) for p in parts if p).lower()
+    if not blob or "covid" in blob:
+        return False
+    return any(
+        token in blob
+        for token in ("cooking", "cook", "omelet", "salad", "sushi", "recipe")
+    )
 
 
 def _is_cooking_take(take: dict, cfg: Dict[str, Any]) -> bool:
     scenario = cfg.get("scenario", {})
     task_id = scenario.get("parent_task_id")
-    task_name = scenario.get("parent_task_name")
-    if task_id is not None and take.get("parent_task_id") == task_id:
+    task_name = str(scenario.get("parent_task_name") or "")
+    raw_id = take.get("parent_task_id", take.get("task_id"))
+    if task_id is not None and raw_id is not None and str(raw_id) == str(task_id):
         return True
-    if task_name and take.get("parent_task_name") == task_name:
+    name = str(take.get("parent_task_name") or take.get("task_name") or "")
+    if task_name and name.lower().startswith(task_name.lower()):
         return True
-    return False
+    return _text_looks_cooking(name, take.get("take_name"))
 
 
 def load_takes_json(cfg: Dict[str, Any]) -> List[dict]:
@@ -54,16 +83,20 @@ def cooking_uids_for_download(cfg: Dict[str, Any]) -> List[str]:
     return sorted(set(uids))
 
 
+def load_relations_annotations(cfg: Dict[str, Any], split: str) -> Dict[str, dict]:
+    path = relations_path(cfg, split)
+    if not path.exists():
+        return {}
+    with path.open() as f:
+        data = json.load(f)
+    return unwrap_relations_dict(data)
+
+
 def _relations_take_uids(cfg: Dict[str, Any]) -> Dict[str, str]:
     """Map take_uid → relations split name (train/val)."""
     out: Dict[str, str] = {}
     for split in ("train", "val"):
-        path = relations_path(cfg, split)
-        if not path.exists():
-            continue
-        with path.open() as f:
-            data = json.load(f)
-        for take_uid in data:
+        for take_uid in load_relations_annotations(cfg, split):
             out[take_uid] = split
     return out
 
@@ -108,29 +141,49 @@ def build_cooking_takes_manifest(cfg: Dict[str, Any]) -> Path:
 
     all_takes = load_takes_json(cfg)
     takes_by_uid = {t["take_uid"]: t for t in all_takes}
-    rel_uids = _relations_take_uids(cfg)
+    rel_by_split = {
+        split: load_relations_annotations(cfg, split) for split in ("train", "val")
+    }
+    rel_uids: Dict[str, str] = {}
+    rel_blobs: Dict[str, dict] = {}
+    for split, anns in rel_by_split.items():
+        for uid, blob in anns.items():
+            rel_uids[uid] = split
+            rel_blobs[uid] = blob
 
     records: List[dict] = []
     stats = {
         "total_takes_json": len(all_takes),
-        "cooking_in_takes_json": 0,
+        "cooking_in_takes_json": sum(1 for t in all_takes if _is_cooking_take(t, cfg)),
+        "relations_takes": len(rel_uids),
         "in_relations": 0,
         "with_mps": 0,
         "with_calib": 0,
         "with_exo_video": 0,
         "selected": 0,
+        "missing_from_takes_json": 0,
     }
 
     for take_uid, rel_split in rel_uids.items():
+        blob = rel_blobs.get(take_uid) or {}
         take = takes_by_uid.get(take_uid)
         if take is None:
+            stats["missing_from_takes_json"] += 1
+            take = {
+                "take_uid": take_uid,
+                "take_name": blob.get("take_name"),
+                "parent_task_name": blob.get("scenario"),
+            }
+        if not (
+            _is_cooking_take(take, cfg)
+            or _text_looks_cooking(blob.get("scenario"), blob.get("take_name"))
+        ):
             continue
-        if not _is_cooking_take(take, cfg):
-            continue
-        stats["cooking_in_takes_json"] += 1
         stats["in_relations"] += 1
 
-        take_name = take["take_name"]
+        take_name = take.get("take_name") or blob.get("take_name")
+        if not take_name:
+            continue
         take_path = root / "takes" / take_name
         has_mps = _take_has_mps(take_path)
         has_calib = _take_has_gopro_calib(take_path)

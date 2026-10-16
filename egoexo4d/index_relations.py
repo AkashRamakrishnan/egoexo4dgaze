@@ -8,7 +8,7 @@ from typing import Any, Dict, List
 
 import pandas as pd
 
-from egoexo4d.index_takes import load_cooking_takes
+from egoexo4d.index_takes import load_cooking_takes, unwrap_relations_dict
 from egoexo4d.labels import normalize_label, should_keep_track
 from egoexo4d.paths import manifests_dir, relations_path
 
@@ -71,7 +71,7 @@ def build_frame_index(cfg: Dict[str, Any]) -> Path:
         path = relations_path(cfg, split)
         if path.exists():
             with path.open() as f:
-                rel_cache[split] = json.load(f)
+                rel_cache[split] = unwrap_relations_dict(json.load(f))
 
     filters = cfg.get("filters", {})
     drop_hand = bool(filters.get("drop_hand_tracks", True))
