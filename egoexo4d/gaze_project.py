@@ -38,25 +38,35 @@ def find_gopro_calibs(take_path: Path) -> Path:
     raise FileNotFoundError(f"No gopro_calibs.csv under {take_path}")
 
 
+def _vrs_rank(path: Path) -> Tuple[int, str]:
+    name = path.name.lower()
+    if "noimagestream" in name:
+        return (0, name)
+    if name.startswith("aria"):
+        return (1, name)
+    return (2, name)
+
+
+def _collect_vrs(root: Path) -> List[Path]:
+    if not root.is_dir():
+        return []
+    found = list(root.glob("*.vrs"))
+    if found:
+        return found
+    return list(root.rglob("*.vrs"))
+
+
 def find_aria_vrs(take_path: Path) -> Optional[Path]:
-    """Aria VRS lives on the take or the parent capture (needed for CPF calib in Aria 2.x)."""
+    """Factory CPF calib is in take-level VRS (usually ``aria01_noimagestreams.vrs``)."""
     take_path = Path(take_path)
-    hits = sorted(take_path.glob("aria*.vrs"))
-    if hits:
-        return hits[0]
-    nested = sorted(take_path.rglob("aria*.vrs"))
-    if nested:
-        return nested[0]
+    candidates = _collect_vrs(take_path)
     capture = re.sub(r"_\d+$", "", take_path.name)
     capture_dir = take_path.parent.parent / "captures" / capture
-    if capture_dir.is_dir():
-        hits = sorted(capture_dir.glob("aria*.vrs"))
-        if hits:
-            return hits[0]
-        nested = sorted(capture_dir.rglob("aria*.vrs"))
-        if nested:
-            return nested[0]
-    return None
+    candidates.extend(_collect_vrs(capture_dir))
+    if not candidates:
+        return None
+    uniq = {p.resolve(): p for p in candidates}
+    return sorted(uniq.values(), key=_vrs_rank)[0]
 
 
 @dataclass
@@ -145,8 +155,8 @@ class GazeProjector:
         vrs_path = find_aria_vrs(self.take_path)
         if vrs_path is None:
             raise FileNotFoundError(
-                f"No aria*.vrs under {self.take_path} or captures/ "
-                "(required for get_transform_device_cpf in projectaria-tools 2.x)"
+                f"No *.vrs under {self.take_path} "
+                "(need --parts take_vrs_noimagestream: aria01_noimagestreams.vrs)"
             )
         vrs = data_provider.create_vrs_data_provider(str(vrs_path))
         if vrs is None:

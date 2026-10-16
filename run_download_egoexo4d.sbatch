@@ -16,6 +16,7 @@
 #     run_download_egoexo4d.sbatch
 #
 # Full Relations (large):  sbatch --export=ALL,DOWNLOAD_ARGS=--all-relations ...
+# Missing Aria VRS only:   sbatch --export=ALL,DOWNLOAD_ARGS=--vrs-only ...
 
 hostname
 module load nvidia/cuda-10.1 2>/dev/null || true

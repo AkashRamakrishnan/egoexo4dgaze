@@ -23,7 +23,7 @@ def main() -> int:
         "--min-selected",
         type=int,
         default=1,
-        help="Minimum complete Cooking takes (MPS + calib + exo video).",
+        help="Minimum complete Cooking takes (MPS + calib + exo video + Aria VRS).",
     )
     p.add_argument(
         "--require-val",
@@ -71,9 +71,10 @@ def main() -> int:
     if n < args.min_selected:
         print(
             "\nNot enough complete Cooking takes "
-            "(each needs Relations + MPS gaze + GoPro calib + exo cam*.mp4).\n"
-            "Folders under takes/ are not enough if eye_gaze/ or frame_aligned_videos/ are missing.\n"
-            "  EGOEXO_ROOT=<root> ./scripts/01_download.sh\n"
+            "(each needs Relations + MPS gaze + GoPro calib + exo cam*.mp4 "
+            "+ aria*.vrs / aria01_noimagestreams.vrs).\n"
+            "VRS is --parts take_vrs_noimagestream (not included in --parts takes).\n"
+            "  EGOEXO_ROOT=<root> ./scripts/01_download.sh --vrs-only\n"
         )
         ok = False
     else:

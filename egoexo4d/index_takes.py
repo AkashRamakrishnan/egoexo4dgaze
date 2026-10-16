@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 from typing import Any, Dict, List
 
+from egoexo4d.gaze_project import find_aria_vrs
 from egoexo4d.paths import egoexo_root, manifests_dir, relations_path, takes_json_path
 
 
@@ -161,6 +162,7 @@ def build_cooking_takes_manifest(cfg: Dict[str, Any]) -> Path:
         "with_mps": 0,
         "with_calib": 0,
         "with_exo_video": 0,
+        "with_vrs": 0,
         "selected": 0,
         "missing_from_takes_json": 0,
     }
@@ -188,6 +190,7 @@ def build_cooking_takes_manifest(cfg: Dict[str, Any]) -> Path:
         take_path = root / "takes" / take_name
         has_mps = _take_has_mps(take_path)
         has_calib = _take_has_gopro_calib(take_path)
+        has_vrs = find_aria_vrs(take_path) is not None
         exo_cams = _exo_cams_for_take(take_path, prefix=cfg["filters"].get("exo_cam_prefix", "cam"))
 
         if has_mps:
@@ -196,8 +199,10 @@ def build_cooking_takes_manifest(cfg: Dict[str, Any]) -> Path:
             stats["with_calib"] += 1
         if exo_cams:
             stats["with_exo_video"] += 1
+        if has_vrs:
+            stats["with_vrs"] += 1
 
-        if not (has_mps and has_calib and exo_cams):
+        if not (has_mps and has_calib and exo_cams and has_vrs):
             continue
 
         stats["selected"] += 1
@@ -227,7 +232,8 @@ def build_cooking_takes_manifest(cfg: Dict[str, Any]) -> Path:
     print(
         f"[index_takes] selected {len(records)} cooking takes "
         f"(relations={stats['in_relations']}, mps={stats['with_mps']}, "
-        f"calib={stats['with_calib']}, exo={stats['with_exo_video']})"
+        f"calib={stats['with_calib']}, exo={stats['with_exo_video']}, "
+        f"vrs={stats['with_vrs']})"
     )
     return manifest_path
 

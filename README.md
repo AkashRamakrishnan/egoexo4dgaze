@@ -32,6 +32,12 @@ export EGOEXO_ROOT=/path/with/disk/egoexo4d
 sbatch run_download_egoexo4d.sbatch
 ```
 
+Gaze projection needs Aria VRS factory calib (`aria01_noimagestreams.vrs`). That is **`--parts take_vrs_noimagestream`**, not `--parts takes` (MP4s only). If videos/gaze/trajectory are already on disk:
+
+```bash
+sbatch --export=ALL,DOWNLOAD_ARGS=--vrs-only run_download_egoexo4d.sbatch
+```
+
 For a single-take smoke test after the main download:
 
 ```bash
