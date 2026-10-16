@@ -19,6 +19,24 @@ def _first_existing(root: Path, relatives: Tuple[str, ...]) -> Optional[Path]:
     return None
 
 
+def find_gopro_calibs(take_path: Path) -> Path:
+    found = _first_existing(
+        take_path,
+        (
+            "trajectory/gopro_calibs.csv",
+            "take_trajectory/gopro_calibs.csv",
+            "mps/trajectory/gopro_calibs.csv",
+            "slam/gopro_calibs.csv",
+        ),
+    )
+    if found is not None:
+        return found
+    hits = sorted(Path(take_path).rglob("gopro_calibs.csv"))
+    if hits:
+        return hits[0]
+    raise FileNotFoundError(f"No gopro_calibs.csv under {take_path}")
+
+
 @dataclass
 class ExoCamera:
     name: str
@@ -59,7 +77,7 @@ class GazeProjector:
             ) from exc
 
         self._mps = self._make_mps_provider(mps)
-        calib_path = self._find_gopro_calibs()
+        calib_path = find_gopro_calibs(self.take_path)
         static_calibrations = mps.read_static_camera_calibrations(str(calib_path))
         import math
 
@@ -131,27 +149,6 @@ class GazeProjector:
                 )
                 if found is not None:
                     eyegaze.general_eyegaze = str(found)
-
-    @staticmethod
-    def _find_gopro_calibs(take_path: Path) -> Path:
-        found = _first_existing(
-            take_path,
-            (
-                "trajectory/gopro_calibs.csv",
-                "take_trajectory/gopro_calibs.csv",
-                "mps/trajectory/gopro_calibs.csv",
-                "slam/gopro_calibs.csv",
-            ),
-        )
-        if found is not None:
-            return found
-        hits = sorted(take_path.rglob("gopro_calibs.csv"))
-        if hits:
-            return hits[0]
-        raise FileNotFoundError(f"No gopro_calibs.csv under {take_path}")
-
-    def _find_gopro_calibs(self) -> Path:
-        return GazeProjector._find_gopro_calibs(self.take_path)
 
     def _load_pose_timestamps(self, mps_module) -> Optional[np.ndarray]:
         for rel in (
