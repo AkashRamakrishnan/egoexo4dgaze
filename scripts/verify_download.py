@@ -19,6 +19,17 @@ from egoexo4d.paths import egoexo_root, load_config, relations_path, takes_json_
 def main() -> int:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--config", type=Path, default=None)
+    p.add_argument(
+        "--min-selected",
+        type=int,
+        default=1,
+        help="Minimum complete Cooking takes (MPS + calib + exo video).",
+    )
+    p.add_argument(
+        "--require-val",
+        action="store_true",
+        help="Fail if relations_val.json is missing (full MVP). Sample QA does not need this.",
+    )
     args = p.parse_args()
     cfg = load_config(args.config)
     root = egoexo_root(cfg)
@@ -27,8 +38,9 @@ def main() -> int:
     required_top = [
         takes_json_path(cfg),
         relations_path(cfg, "train"),
-        relations_path(cfg, "val"),
     ]
+    if args.require_val:
+        required_top.append(relations_path(cfg, "val"))
     print(f"Ego-Exo root: {root}")
     for path in required_top:
         if path.exists():
@@ -37,10 +49,14 @@ def main() -> int:
             print(f"  MISSING  {path}")
             ok = False
 
-    if not takes_json_path(cfg).exists():
+    val_path = relations_path(cfg, "val")
+    if not args.require_val and not val_path.exists():
+        print(f"  optional missing  {val_path} (ok for sample QA)")
+
+    if not takes_json_path(cfg).exists() or not relations_path(cfg, "train").exists():
         print(
-            "\nRun:  EGOEXO_ROOT=<root> ./scripts/01_download.sh\n"
-            "Ensure AWS is configured (aws configure or AWS_PROFILE)."
+            "\nNeed metadata + Relations annotations before sample/build.\n"
+            "  EGOEXO_ROOT=<root> ./scripts/01_download.sh --metadata-only\n"
         )
         return 1
 
@@ -49,18 +65,19 @@ def main() -> int:
     stats = payload.get("stats", {})
     n = len(payload.get("takes", []))
     print(f"\nCooking manifest: {manifest}")
-    print(f"  selected takes: {n}")
+    print(f"  selected complete takes: {n} (need >= {args.min_selected})")
     print(f"  stats: {json.dumps(stats, indent=2)}")
 
-    if n == 0:
+    if n < args.min_selected:
         print(
-            "\nNo takes passed filters (need Relations + MPS gaze + GoPro calib + exo cam*.mp4).\n"
-            "Re-run download with take media parts, e.g.:\n"
-            "  egoexo -o <root> --release v2 --parts annotations metadata takes "
-            "captures take_eye_gaze take_trajectory --benchmarks relations "
-            "--splits train val -y"
+            "\nNot enough complete Cooking takes "
+            "(each needs Relations + MPS gaze + GoPro calib + exo cam*.mp4).\n"
+            "Folders under takes/ are not enough if eye_gaze/ or frame_aligned_videos/ are missing.\n"
+            "  EGOEXO_ROOT=<root> ./scripts/01_download.sh\n"
         )
         ok = False
+    else:
+        print(f"\nReady for sample QA / index ({n} complete Cooking take(s) on disk).")
 
     return 0 if ok else 1
 

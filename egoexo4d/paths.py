@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any, Dict
 
@@ -16,6 +17,10 @@ def load_config(path: str | Path | None = None) -> Dict[str, Any]:
     with cfg_path.open() as f:
         cfg = yaml.safe_load(f)
     cfg["_config_path"] = str(cfg_path.resolve())
+    if os.environ.get("EGOEXO_ROOT"):
+        cfg["egoexo_root"] = os.environ["EGOEXO_ROOT"]
+    if os.environ.get("EGOEXO_OUTPUT_ROOT"):
+        cfg["output_root"] = os.environ["EGOEXO_OUTPUT_ROOT"]
     return cfg
 
 

@@ -147,31 +147,16 @@ class GazeProjector:
         if ts is None:
             return None
 
-        import projectaria_tools.core.mps as mps
-
         mps_provider = self._mps
         pose_info = mps_provider.get_closed_loop_pose(ts)
         if pose_info is None:
             return None
 
-        if self.prefer_personalized and mps_provider.has_personalized_eyegaze():
-            eye_gaze = mps_provider.get_personalized_eyegaze(ts)
-        else:
-            eye_gaze = mps_provider.get_general_eyegaze(ts)
-        if eye_gaze is None:
+        packed = self._eyegaze_in_device(ts)
+        if packed is None:
             return None
-
+        _device_calib, gaze_vector_in_device = packed
         T_world_device = pose_info.transform_world_device
-        device_calib = mps_provider.get_device_calibration()
-        if device_calib is None:
-            return None
-        T_device_CPF = device_calib.get_transform_device_cpf()
-
-        gaze_vector_in_cpf = mps.get_eyegaze_point_at_depth(
-            eye_gaze.yaw, eye_gaze.pitch, eye_gaze.depth
-        )
-        gaze_vector_in_cpf = np.nan_to_num(gaze_vector_in_cpf)
-        gaze_vector_in_device = T_device_CPF @ gaze_vector_in_cpf
         gaze_vector_in_world = T_world_device @ gaze_vector_in_device
 
         exo = self._exo_cams[cam]
@@ -180,6 +165,62 @@ class GazeProjector:
         if projection is None:
             return None
         return float(projection[0]), float(projection[1])
+
+    def _eyegaze_in_device(self, ts: int):
+        import projectaria_tools.core.mps as mps
+
+        mps_provider = self._mps
+        if self.prefer_personalized and mps_provider.has_personalized_eyegaze():
+            eye_gaze = mps_provider.get_personalized_eyegaze(ts)
+        else:
+            eye_gaze = mps_provider.get_general_eyegaze(ts)
+        if eye_gaze is None:
+            return None
+        device_calib = mps_provider.get_device_calibration()
+        if device_calib is None:
+            return None
+        T_device_CPF = device_calib.get_transform_device_cpf()
+        gaze_vector_in_cpf = mps.get_eyegaze_point_at_depth(
+            eye_gaze.yaw, eye_gaze.pitch, eye_gaze.depth
+        )
+        gaze_vector_in_cpf = np.nan_to_num(gaze_vector_in_cpf)
+        return device_calib, T_device_CPF @ gaze_vector_in_cpf
+
+    def project_ego_gaze(
+        self,
+        frame_idx: int,
+        timestamp_cam: str,
+        calib_label: str = "camera-rgb",
+    ) -> Optional[Tuple[float, float, Tuple[float, float]]]:
+        """Project MPS gaze onto an Aria camera.
+
+        Returns ``(x, y, (calib_w, calib_h))`` in the calibration pixel frame,
+        or None if unavailable. Callers should scale to the decoded video size.
+        """
+        ts = self.frame_to_timestamp_ns(frame_idx, timestamp_cam)
+        if ts is None:
+            return None
+        packed = self._eyegaze_in_device(ts)
+        if packed is None:
+            return None
+        device_calib, gaze_in_device = packed
+        rgb_cam = device_calib.get_camera_calib(calib_label)
+        if rgb_cam is None:
+            return None
+        T_device_cam = rgb_cam.get_transform_device_camera()
+        gaze_in_cam = T_device_cam.inverse() @ gaze_in_device
+        projection = rgb_cam.project(gaze_in_cam)
+        if projection is None:
+            return None
+        try:
+            size = rgb_cam.get_image_size()
+            cal_wh = (float(size[0]), float(size[1]))
+        except Exception:
+            cal_wh = (
+                float(getattr(rgb_cam, "get_image_width", lambda: 0)() or 0),
+                float(getattr(rgb_cam, "get_image_height", lambda: 0)() or 0),
+            )
+        return float(projection[0]), float(projection[1]), cal_wh
 
 
 @lru_cache(maxsize=64)

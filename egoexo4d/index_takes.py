@@ -20,6 +20,40 @@ def _is_cooking_take(take: dict, cfg: Dict[str, Any]) -> bool:
     return False
 
 
+def load_takes_json(cfg: Dict[str, Any]) -> List[dict]:
+    path = takes_json_path(cfg)
+    if not path.exists():
+        raise FileNotFoundError(f"Missing takes.json: {path}")
+    with path.open() as f:
+        data = json.load(f)
+    if isinstance(data, list):
+        return data
+    if isinstance(data, dict):
+        if isinstance(data.get("takes"), list):
+            return data["takes"]
+        values = list(data.values())
+        if values and isinstance(values[0], dict) and "take_uid" in values[0]:
+            return values
+    raise ValueError(f"Unrecognized takes.json format: {path}")
+
+
+def cooking_uids_for_download(cfg: Dict[str, Any]) -> List[str]:
+    """Cooking take UIDs, intersected with Relations train/val when those JSONs exist."""
+    takes = load_takes_json(cfg)
+    rel = _relations_take_uids(cfg)
+    uids: List[str] = []
+    for take in takes:
+        if not _is_cooking_take(take, cfg):
+            continue
+        uid = take.get("take_uid")
+        if not uid:
+            continue
+        if rel and uid not in rel:
+            continue
+        uids.append(str(uid))
+    return sorted(set(uids))
+
+
 def _relations_take_uids(cfg: Dict[str, Any]) -> Dict[str, str]:
     """Map take_uid → relations split name (train/val)."""
     out: Dict[str, str] = {}
@@ -72,8 +106,7 @@ def build_cooking_takes_manifest(cfg: Dict[str, Any]) -> Path:
     if not takes_path.exists():
         raise FileNotFoundError(f"Missing takes.json: {takes_path}")
 
-    with takes_path.open() as f:
-        all_takes = json.load(f)
+    all_takes = load_takes_json(cfg)
     takes_by_uid = {t["take_uid"]: t for t in all_takes}
     rel_uids = _relations_take_uids(cfg)
 

@@ -47,6 +47,14 @@ def fuse_tier_a_rows(cfg: Dict[str, Any]) -> tuple[List[dict], dict]:
     drop_reasons: Counter = Counter()
     projector_cache: Dict[str, Any] = {}
     frame_cache: Dict[tuple, Any] = {}
+    unique_images: set = set()
+
+    build_cfg = cfg.get("build", {})
+    max_images = build_cfg.get("max_tier_a_images")
+    max_images_n = int(max_images) if max_images is not None else None
+    if max_images_n is not None:
+        seed = int(build_cfg.get("shuffle_seed", 42))
+        df = df.sample(frac=1.0, random_state=seed).reset_index(drop=True)
 
     for record in tqdm(df.to_dict(orient="records"), desc="fuse_tier_a"):
         take_uid = record["take_uid"]
@@ -149,6 +157,9 @@ def fuse_tier_a_rows(cfg: Dict[str, Any]) -> tuple[List[dict], dict]:
                 "box_idx": 0,
             }
         )
+        unique_images.add(rel_image)
+        if max_images_n is not None and len(unique_images) >= max_images_n:
+            break
 
     stats = {
         "input_mask_rows": len(df),
@@ -157,6 +168,10 @@ def fuse_tier_a_rows(cfg: Dict[str, Any]) -> tuple[List[dict], dict]:
         "unique_labels": len({r["label_text"] for r in rows}),
         "drop_reasons": dict(drop_reasons),
         "takes": len({r["take_uid"] for r in rows}),
+        "max_tier_a_images": max_images_n,
+        "early_stop": bool(
+            max_images_n is not None and len({r["image_path"] for r in rows}) >= max_images_n
+        ),
     }
     return rows, stats
 

@@ -1,5 +1,7 @@
 _downloads/
 data/
+data_smoke/
+data_sample40/
 __pycache__/
 *.py[cod]
 *.egg-info/
