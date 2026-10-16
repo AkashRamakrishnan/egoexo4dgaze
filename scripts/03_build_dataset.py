@@ -38,6 +38,9 @@ def main() -> None:
         build_frame_index(cfg)
 
     rows, stats = fuse_tier_a_rows(cfg)
+    print(f"[build] fuse drop_reasons={stats.get('drop_reasons')}")
+    if stats.get("projector_errors"):
+        print(f"[build] projector_errors={stats['projector_errors']}")
     min_count = int(cfg.get("filters", {}).get("min_label_count", 5))
     rows, prune_stats = prune_rare_labels(rows, min_count)
     stats["prune"] = prune_stats

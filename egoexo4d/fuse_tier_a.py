@@ -46,6 +46,7 @@ def fuse_tier_a_rows(cfg: Dict[str, Any]) -> tuple[List[dict], dict]:
     rows: List[dict] = []
     drop_reasons: Counter = Counter()
     projector_cache: Dict[str, Any] = {}
+    projector_errors: Dict[str, str] = {}
     frame_cache: Dict[tuple, Any] = {}
     unique_images: set = set()
 
@@ -71,6 +72,8 @@ def fuse_tier_a_rows(cfg: Dict[str, Any]) -> tuple[List[dict], dict]:
                 )
             except Exception as exc:
                 projector_cache[cache_key] = exc
+                projector_errors[take_name] = f"{type(exc).__name__}: {exc}"
+                print(f"[fuse] projector_init_failed {take_name}: {type(exc).__name__}: {exc}")
 
         projector = projector_cache[cache_key]
         if isinstance(projector, Exception):
@@ -167,6 +170,7 @@ def fuse_tier_a_rows(cfg: Dict[str, Any]) -> tuple[List[dict], dict]:
         "unique_images": len({r["image_path"] for r in rows}),
         "unique_labels": len({r["label_text"] for r in rows}),
         "drop_reasons": dict(drop_reasons),
+        "projector_errors": projector_errors,
         "takes": len({r["take_uid"] for r in rows}),
         "max_tier_a_images": max_images_n,
         "early_stop": bool(

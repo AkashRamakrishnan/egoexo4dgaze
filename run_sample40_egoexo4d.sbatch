@@ -39,7 +39,11 @@ echo "CONFIG=$CONFIG"
 echo "EGOEXO_ROOT=$EGOEXO_ROOT"
 echo "EGOEXO_OUTPUT_ROOT=${EGOEXO_OUTPUT_ROOT:-<from yaml>}"
 
-pip install -e ".[gaze]" -q 2>/dev/null || pip install -e . -q
+pip install -e ".[gaze]"
+python - <<'PY'
+import projectaria_tools.core.mps as mps  # noqa: F401
+print("projectaria_tools OK")
+PY
 
 ./scripts/run_sample40.sh
 

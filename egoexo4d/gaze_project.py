@@ -11,6 +11,14 @@ import cv2
 import numpy as np
 
 
+def _first_existing(root: Path, relatives: Tuple[str, ...]) -> Optional[Path]:
+    for rel in relatives:
+        path = root / rel
+        if path.exists():
+            return path
+    return None
+
+
 @dataclass
 class ExoCamera:
     name: str
@@ -50,46 +58,96 @@ class GazeProjector:
                 "Install with: pip install 'egoexo4d[gaze]'"
             ) from exc
 
-        paths_provider = mps.MpsDataPathsProvider(str(self.take_path))
-        data_paths = paths_provider.get_data_paths()
-        self._mps = mps.MpsDataProvider(data_paths)
-
+        self._mps = self._make_mps_provider(mps)
         calib_path = self._find_gopro_calibs()
         static_calibrations = mps.read_static_camera_calibrations(str(calib_path))
         import math
 
+        cam_errors: list[str] = []
         for static_calibration in static_calibrations:
             if float(static_calibration.quality) < self.calib_min_quality:
                 continue
-            cam = CameraCalibration(
-                static_calibration.camera_uid,
-                KANNALA_BRANDT_K3,
-                static_calibration.intrinsics,
-                static_calibration.transform_world_cam,
-                static_calibration.width,
-                static_calibration.height,
-                None,
-                math.pi,
-                "",
-            )
+            try:
+                cam = CameraCalibration(
+                    static_calibration.camera_uid,
+                    KANNALA_BRANDT_K3,
+                    static_calibration.intrinsics,
+                    static_calibration.transform_world_cam,
+                    static_calibration.width,
+                    static_calibration.height,
+                    None,
+                    math.pi,
+                    "",
+                )
+            except Exception as exc:
+                cam_errors.append(f"{static_calibration.camera_uid}: {exc}")
+                continue
             self._exo_cams[static_calibration.camera_uid] = ExoCamera(
                 name=static_calibration.camera_uid,
                 camera=cam,
                 transform_world_cam=static_calibration.transform_world_cam,
             )
 
+        if not self._exo_cams and cam_errors:
+            raise RuntimeError(
+                "Failed to build any exo CameraCalibration: " + "; ".join(cam_errors[:4])
+            )
+
         self._pose_timestamps = self._load_pose_timestamps(mps)
+
+    def _make_mps_provider(self, mps_module):
+        paths_provider = mps_module.MpsDataPathsProvider(str(self.take_path))
+        data_paths = paths_provider.get_data_paths()
+        self._fill_missing_mps_files(data_paths)
+        return mps_module.MpsDataProvider(data_paths)
+
+    def _fill_missing_mps_files(self, data_paths) -> None:
+        slam = getattr(data_paths, "slam", None)
+        if slam is not None:
+            current = getattr(slam, "closed_loop_trajectory", "") or ""
+            if not current or not Path(str(current)).exists():
+                found = _first_existing(
+                    self.take_path,
+                    (
+                        "trajectory/closed_loop_trajectory.csv",
+                        "take_trajectory/closed_loop_trajectory.csv",
+                        "slam/closed_loop_trajectory.csv",
+                        "mps/slam/closed_loop_trajectory.csv",
+                        "mps/trajectory/closed_loop_trajectory.csv",
+                    ),
+                )
+                if found is not None:
+                    slam.closed_loop_trajectory = str(found)
+        eyegaze = getattr(data_paths, "eyegaze", None)
+        if eyegaze is not None:
+            current = getattr(eyegaze, "general_eyegaze", "") or ""
+            if not current or not Path(str(current)).exists():
+                found = _first_existing(
+                    self.take_path,
+                    (
+                        "eye_gaze/general_eye_gaze.csv",
+                        "mps/eye_gaze/general_eye_gaze.csv",
+                    ),
+                )
+                if found is not None:
+                    eyegaze.general_eyegaze = str(found)
 
     @staticmethod
     def _find_gopro_calibs(take_path: Path) -> Path:
-        for rel in (
-            "trajectory/gopro_calibs.csv",
-            "take_trajectory/gopro_calibs.csv",
-            "mps/trajectory/gopro_calibs.csv",
-        ):
-            p = take_path / rel
-            if p.exists():
-                return p
+        found = _first_existing(
+            take_path,
+            (
+                "trajectory/gopro_calibs.csv",
+                "take_trajectory/gopro_calibs.csv",
+                "mps/trajectory/gopro_calibs.csv",
+                "slam/gopro_calibs.csv",
+            ),
+        )
+        if found is not None:
+            return found
+        hits = sorted(take_path.rglob("gopro_calibs.csv"))
+        if hits:
+            return hits[0]
         raise FileNotFoundError(f"No gopro_calibs.csv under {take_path}")
 
     def _find_gopro_calibs(self) -> Path:

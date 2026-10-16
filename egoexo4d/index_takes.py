@@ -116,10 +116,11 @@ def _take_has_gopro_calib(take_path: Path) -> bool:
         "trajectory/gopro_calibs.csv",
         "take_trajectory/gopro_calibs.csv",
         "mps/trajectory/gopro_calibs.csv",
+        "slam/gopro_calibs.csv",
     ):
         if (take_path / rel).exists():
             return True
-    return False
+    return any(take_path.rglob("gopro_calibs.csv"))
 
 
 def _exo_cams_for_take(take_path: Path, prefix: str = "cam") -> List[str]:
