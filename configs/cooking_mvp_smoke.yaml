@@ -1,0 +1,40 @@
+# Smoke build: one cooking take after download (fast sanity check).
+# Usage: CONFIG=configs/cooking_mvp_smoke.yaml ./scripts/run_after_download.sh
+
+egoexo_root: ./_downloads/egoexo4d
+output_root: ./data_smoke
+
+scenario:
+  parent_task_id: 1000
+  parent_task_name: Cooking
+
+relations:
+  train: annotations/relations_train.json
+  val: annotations/relations_val.json
+
+filters:
+  drop_hand_tracks: true
+  min_label_count: 1
+  exo_cam_prefix: cam
+
+gaze:
+  prefer_personalized: true
+  calib_min_quality: 1.0
+
+head_detection:
+  model: yolov8n.pt
+  conf: 0.5
+  head_fraction: 0.35
+
+export:
+  jpeg_quality: 92
+  num_workers: 2
+
+splits:
+  ratios: [0.7, 0.15, 0.15]
+  seed: 42
+
+build:
+  max_takes: 1
+  skip_frame_export: false
+  skip_head_detection: false
