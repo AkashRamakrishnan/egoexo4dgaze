@@ -80,7 +80,11 @@ def fuse_tier_a_rows(cfg: Dict[str, Any]) -> tuple[List[dict], dict]:
             drop_reasons["projector_init_failed"] += 1
             continue
 
-        gaze = projector.project_gaze(cam, frame_idx)
+        try:
+            gaze = projector.project_gaze(cam, frame_idx)
+        except Exception:
+            drop_reasons["project_gaze_exception"] += 1
+            continue
         if gaze is None:
             drop_reasons["gaze_projection_failed"] += 1
             continue

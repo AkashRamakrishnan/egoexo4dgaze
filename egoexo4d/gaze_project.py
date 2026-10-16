@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -37,6 +38,27 @@ def find_gopro_calibs(take_path: Path) -> Path:
     raise FileNotFoundError(f"No gopro_calibs.csv under {take_path}")
 
 
+def find_aria_vrs(take_path: Path) -> Optional[Path]:
+    """Aria VRS lives on the take or the parent capture (needed for CPF calib in Aria 2.x)."""
+    take_path = Path(take_path)
+    hits = sorted(take_path.glob("aria*.vrs"))
+    if hits:
+        return hits[0]
+    nested = sorted(take_path.rglob("aria*.vrs"))
+    if nested:
+        return nested[0]
+    capture = re.sub(r"_\d+$", "", take_path.name)
+    capture_dir = take_path.parent.parent / "captures" / capture
+    if capture_dir.is_dir():
+        hits = sorted(capture_dir.glob("aria*.vrs"))
+        if hits:
+            return hits[0]
+        nested = sorted(capture_dir.rglob("aria*.vrs"))
+        if nested:
+            return nested[0]
+    return None
+
+
 @dataclass
 class ExoCamera:
     name: str
@@ -58,6 +80,8 @@ class GazeProjector:
         self.prefer_personalized = prefer_personalized
         self.calib_min_quality = calib_min_quality
         self._mps = None
+        self._device_calib = None
+        self._T_device_CPF = None
         self._exo_cams: Dict[str, ExoCamera] = {}
         self._pose_timestamps: Optional[np.ndarray] = None
         self._video_fps: Dict[str, float] = {}
@@ -77,6 +101,7 @@ class GazeProjector:
             ) from exc
 
         self._mps = self._make_mps_provider(mps)
+        self._load_device_calibration()
         calib_path = find_gopro_calibs(self.take_path)
         static_calibrations = mps.read_static_camera_calibrations(str(calib_path))
         import math
@@ -112,6 +137,25 @@ class GazeProjector:
             )
 
         self._pose_timestamps = self._load_pose_timestamps(mps)
+
+    def _load_device_calibration(self) -> None:
+        """Aria 2.x: CPF / RGB calib come from VRS, not MpsDataProvider."""
+        from projectaria_tools.core import data_provider
+
+        vrs_path = find_aria_vrs(self.take_path)
+        if vrs_path is None:
+            raise FileNotFoundError(
+                f"No aria*.vrs under {self.take_path} or captures/ "
+                "(required for get_transform_device_cpf in projectaria-tools 2.x)"
+            )
+        vrs = data_provider.create_vrs_data_provider(str(vrs_path))
+        if vrs is None:
+            raise RuntimeError(f"Could not open VRS {vrs_path}")
+        calib = vrs.get_device_calibration()
+        if calib is None:
+            raise RuntimeError(f"No device calibration in {vrs_path}")
+        self._device_calib = calib
+        self._T_device_CPF = calib.get_transform_device_cpf()
 
     def _make_mps_provider(self, mps_module):
         paths_provider = mps_module.MpsDataPathsProvider(str(self.take_path))
@@ -231,15 +275,13 @@ class GazeProjector:
             eye_gaze = mps_provider.get_general_eyegaze(ts)
         if eye_gaze is None:
             return None
-        device_calib = mps_provider.get_device_calibration()
-        if device_calib is None:
+        if self._device_calib is None or self._T_device_CPF is None:
             return None
-        T_device_CPF = device_calib.get_transform_device_cpf()
         gaze_vector_in_cpf = mps.get_eyegaze_point_at_depth(
             eye_gaze.yaw, eye_gaze.pitch, eye_gaze.depth
         )
         gaze_vector_in_cpf = np.nan_to_num(gaze_vector_in_cpf)
-        return device_calib, T_device_CPF @ gaze_vector_in_cpf
+        return self._device_calib, self._T_device_CPF @ gaze_vector_in_cpf
 
     def project_ego_gaze(
         self,
