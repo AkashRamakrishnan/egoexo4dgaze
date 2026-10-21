@@ -23,7 +23,7 @@ def main() -> int:
         "--min-selected",
         type=int,
         default=1,
-        help="Minimum complete Cooking takes (MPS + calib + exo video + Aria VRS).",
+        help="Minimum complete scenario takes (MPS + calib + exo video + Aria VRS).",
     )
     p.add_argument(
         "--require-val",
@@ -64,21 +64,22 @@ def main() -> int:
     payload = json.loads(manifest.read_text())
     stats = payload.get("stats", {})
     n = len(payload.get("takes", []))
-    print(f"\nCooking manifest: {manifest}")
+    label = stats.get("scenario") or "scenario"
+    print(f"\n{label} manifest: {manifest}")
     print(f"  selected complete takes: {n} (need >= {args.min_selected})")
     print(f"  stats: {json.dumps(stats, indent=2)}")
 
     if n < args.min_selected:
         print(
-            "\nNot enough complete Cooking takes "
+            f"\nNot enough complete {label} takes "
             "(each needs Relations + MPS gaze + GoPro calib + exo cam*.mp4 "
             "+ aria*.vrs / aria01_noimagestreams.vrs).\n"
             "VRS is --parts take_vrs_noimagestream (not included in --parts takes).\n"
-            "  EGOEXO_ROOT=<root> ./scripts/01_download.sh --vrs-only\n"
+            "  EGOEXO_ROOT=<root> CONFIG=<config> ./scripts/01_download.sh --vrs-only\n"
         )
         ok = False
     else:
-        print(f"\nReady for sample QA / index ({n} complete Cooking take(s) on disk).")
+        print(f"\nReady for sample QA / index ({n} complete {label} take(s) on disk).")
 
     return 0 if ok else 1
 

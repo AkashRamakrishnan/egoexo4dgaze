@@ -1,4 +1,4 @@
-"""Index Cooking takes with Relations, MPS gaze, and exo calibration."""
+"""Index scenario takes with Relations, MPS gaze, and exo calibration."""
 
 from __future__ import annotations
 
@@ -7,7 +7,21 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 from egoexo4d.gaze_project import find_aria_vrs
-from egoexo4d.paths import egoexo_root, manifests_dir, relations_path, takes_json_path
+from egoexo4d.paths import (
+    egoexo_root,
+    manifests_dir,
+    relations_path,
+    resolve_takes_manifest,
+    takes_json_path,
+    takes_manifest_path,
+)
+from egoexo4d.scenarios import (
+    is_scenario_take,
+    scenario_name,
+    scenario_slug,
+    text_matches_scenario,
+    scenario_spec,
+)
 
 
 def unwrap_relations_dict(data: Any) -> Dict[str, dict]:
@@ -28,26 +42,12 @@ def unwrap_relations_dict(data: Any) -> Dict[str, dict]:
 
 
 def _text_looks_cooking(*parts: Any) -> bool:
-    blob = " ".join(str(p) for p in parts if p).lower()
-    if not blob or "covid" in blob:
-        return False
-    return any(
-        token in blob
-        for token in ("cooking", "cook", "omelet", "salad", "sushi", "recipe")
-    )
+    return text_matches_scenario(scenario_spec("cooking"), *parts)
 
 
 def _is_cooking_take(take: dict, cfg: Dict[str, Any]) -> bool:
-    scenario = cfg.get("scenario", {})
-    task_id = scenario.get("parent_task_id")
-    task_name = str(scenario.get("parent_task_name") or "")
-    raw_id = take.get("parent_task_id", take.get("task_id"))
-    if task_id is not None and raw_id is not None and str(raw_id) == str(task_id):
-        return True
-    name = str(take.get("parent_task_name") or take.get("task_name") or "")
-    if task_name and name.lower().startswith(task_name.lower()):
-        return True
-    return _text_looks_cooking(name, take.get("take_name"))
+    """Backward-compatible alias for ``is_scenario_take``."""
+    return is_scenario_take(take, cfg)
 
 
 def load_takes_json(cfg: Dict[str, Any]) -> List[dict]:
@@ -68,12 +68,17 @@ def load_takes_json(cfg: Dict[str, Any]) -> List[dict]:
 
 
 def cooking_uids_for_download(cfg: Dict[str, Any]) -> List[str]:
-    """Cooking take UIDs, intersected with Relations train/val when those JSONs exist."""
+    """Take UIDs for the config scenario, intersected with Relations train/val."""
+    return scenario_uids_for_download(cfg)
+
+
+def scenario_uids_for_download(cfg: Dict[str, Any]) -> List[str]:
+    """Scenario take UIDs, intersected with Relations train/val when those JSONs exist."""
     takes = load_takes_json(cfg)
     rel = _relations_take_uids(cfg)
     uids: List[str] = []
     for take in takes:
-        if not _is_cooking_take(take, cfg):
+        if not is_scenario_take(take, cfg):
             continue
         uid = take.get("take_uid")
         if not uid:
@@ -135,7 +140,7 @@ def _exo_cams_for_take(take_path: Path, prefix: str = "cam") -> List[str]:
 
 
 def build_cooking_takes_manifest(cfg: Dict[str, Any]) -> Path:
-    """Write ``manifests/cooking_takes.json`` and return its path."""
+    """Write ``manifests/scenario_takes.json`` (and Cooking ``cooking_takes.json``)."""
     root = egoexo_root(cfg)
     takes_path = takes_json_path(cfg)
     if not takes_path.exists():
@@ -154,9 +159,13 @@ def build_cooking_takes_manifest(cfg: Dict[str, Any]) -> Path:
             rel_blobs[uid] = blob
 
     records: List[dict] = []
+    n_in_takes = sum(1 for t in all_takes if is_scenario_take(t, cfg))
     stats = {
         "total_takes_json": len(all_takes),
-        "cooking_in_takes_json": sum(1 for t in all_takes if _is_cooking_take(t, cfg)),
+        "scenario": scenario_name(cfg),
+        "scenario_slug": scenario_slug(cfg),
+        "scenario_in_takes_json": n_in_takes,
+        "cooking_in_takes_json": n_in_takes,
         "relations_takes": len(rel_uids),
         "in_relations": 0,
         "with_mps": 0,
@@ -177,9 +186,8 @@ def build_cooking_takes_manifest(cfg: Dict[str, Any]) -> Path:
                 "take_name": blob.get("take_name"),
                 "parent_task_name": blob.get("scenario"),
             }
-        if not (
-            _is_cooking_take(take, cfg)
-            or _text_looks_cooking(blob.get("scenario"), blob.get("take_name"))
+        if not is_scenario_take(
+            take, cfg, extra_parts=(blob.get("scenario"), blob.get("take_name"))
         ):
             continue
         stats["in_relations"] += 1
@@ -224,13 +232,18 @@ def build_cooking_takes_manifest(cfg: Dict[str, Any]) -> Path:
 
     out_dir = manifests_dir(cfg)
     out_dir.mkdir(parents=True, exist_ok=True)
-    manifest_path = out_dir / "cooking_takes.json"
     payload = {"stats": stats, "takes": records}
+    manifest_path = takes_manifest_path(cfg)
     with manifest_path.open("w") as f:
         json.dump(payload, f, indent=2)
+    if scenario_slug(cfg) == "cooking":
+        legacy = out_dir / "cooking_takes.json"
+        with legacy.open("w") as f:
+            json.dump(payload, f, indent=2)
 
+    label = scenario_name(cfg)
     print(
-        f"[index_takes] selected {len(records)} cooking takes "
+        f"[index_takes] selected {len(records)} {label} takes "
         f"(relations={stats['in_relations']}, mps={stats['with_mps']}, "
         f"calib={stats['with_calib']}, exo={stats['with_exo_video']}, "
         f"vrs={stats['with_vrs']})"
@@ -239,9 +252,10 @@ def build_cooking_takes_manifest(cfg: Dict[str, Any]) -> Path:
 
 
 def load_cooking_takes(cfg: Dict[str, Any]) -> List[dict]:
-    path = manifests_dir(cfg) / "cooking_takes.json"
+    path = resolve_takes_manifest(cfg)
     if not path.exists():
         build_cooking_takes_manifest(cfg)
+        path = resolve_takes_manifest(cfg)
     with path.open() as f:
         payload = json.load(f)
     return payload["takes"]

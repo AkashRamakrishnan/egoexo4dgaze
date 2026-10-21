@@ -10,7 +10,10 @@ from pathlib import Path
 import sys
 sys.path.insert(0, "${ROOT}")
 from egoexo4d.paths import load_config, output_root
-cfg = load_config("${ROOT}/${CONFIG}")
+cfg_path = Path("${CONFIG}")
+if not cfg_path.is_absolute():
+    cfg_path = Path("${ROOT}") / cfg_path
+cfg = load_config(cfg_path)
 print(output_root(cfg))
 PY
 )"

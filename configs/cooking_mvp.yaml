@@ -1,9 +1,12 @@
 # Cooking MVP: Tier-A gaze-in-mask fusion on exocentric GoPro frames.
+# Keep every object label (min_label_count: 1). Re-run 03_build_dataset to
+# recover rare labels from an earlier prune (existing JPEGs are skipped).
 
 egoexo_root: ./_downloads/egoexo4d
 output_root: ./data
 
 scenario:
+  slug: cooking
   parent_task_id: 1000
   parent_task_name: Cooking
 
@@ -13,7 +16,7 @@ relations:
 
 filters:
   drop_hand_tracks: true
-  min_label_count: 5
+  min_label_count: 1
   exo_cam_prefix: cam
 
 gaze:

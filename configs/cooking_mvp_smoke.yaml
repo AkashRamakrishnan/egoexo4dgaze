@@ -5,6 +5,7 @@ egoexo_root: ./_downloads/egoexo4d
 output_root: ./data_smoke
 
 scenario:
+  slug: cooking
   parent_task_id: 1000
   parent_task_name: Cooking
 

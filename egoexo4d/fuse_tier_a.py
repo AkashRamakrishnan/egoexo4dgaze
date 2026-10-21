@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from collections import Counter, defaultdict
+from collections import Counter
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -20,6 +20,22 @@ from egoexo4d.paths import egoexo_root, manifests_dir
 
 def image_rel_path(take_uid: str, cam: str, frame_idx: int) -> str:
     return f"{take_uid}/{cam}/{frame_idx:06d}.jpg"
+
+
+def summarize_unique_frame_status(frame_status: Dict[tuple, dict]) -> dict:
+    """Collapse per-frame flags into unique-frame funnel counts."""
+    n = len(frame_status)
+    projector_ok = sum(1 for s in frame_status.values() if s.get("projector_ok"))
+    gaze_ok = sum(1 for s in frame_status.values() if s.get("gaze_ok"))
+    in_mask = sum(1 for s in frame_status.values() if s.get("in_mask"))
+    kept = sum(1 for s in frame_status.values() if s.get("kept"))
+    return {
+        "unique_relations_frames_processed": n,
+        "unique_frames_projector_ok": projector_ok,
+        "unique_frames_with_gaze": gaze_ok,
+        "unique_frames_gaze_in_object_mask": in_mask,
+        "unique_frames_kept": kept,
+    }
 
 
 def fuse_tier_a_rows(cfg: Dict[str, Any]) -> tuple[List[dict], dict]:
@@ -49,6 +65,7 @@ def fuse_tier_a_rows(cfg: Dict[str, Any]) -> tuple[List[dict], dict]:
     projector_errors: Dict[str, str] = {}
     frame_cache: Dict[tuple, Any] = {}
     unique_images: set = set()
+    frame_status: Dict[tuple, dict] = {}
 
     build_cfg = cfg.get("build", {})
     max_images = build_cfg.get("max_tier_a_images")
@@ -64,6 +81,16 @@ def fuse_tier_a_rows(cfg: Dict[str, Any]) -> tuple[List[dict], dict]:
         frame_idx = int(record["frame_idx"])
 
         take_path = root / "takes" / take_name
+        frame_key = (take_uid, cam, frame_idx)
+        st = frame_status.setdefault(
+            frame_key,
+            {
+                "projector_ok": False,
+                "gaze_ok": False,
+                "in_mask": False,
+                "kept": False,
+            },
+        )
         cache_key = str(take_path)
         if cache_key not in projector_cache:
             try:
@@ -79,6 +106,7 @@ def fuse_tier_a_rows(cfg: Dict[str, Any]) -> tuple[List[dict], dict]:
         if isinstance(projector, Exception):
             drop_reasons["projector_init_failed"] += 1
             continue
+        st["projector_ok"] = True
 
         try:
             gaze = projector.project_gaze(cam, frame_idx)
@@ -88,6 +116,7 @@ def fuse_tier_a_rows(cfg: Dict[str, Any]) -> tuple[List[dict], dict]:
         if gaze is None:
             drop_reasons["gaze_projection_failed"] += 1
             continue
+        st["gaze_ok"] = True
         gaze_x, gaze_y = gaze
 
         try:
@@ -105,6 +134,7 @@ def fuse_tier_a_rows(cfg: Dict[str, Any]) -> tuple[List[dict], dict]:
         if not point_in_mask(gaze_x, gaze_y, mask):
             drop_reasons["gaze_outside_mask"] += 1
             continue
+        st["in_mask"] = True
 
         try:
             box = mask_to_bbox(mask)
@@ -117,7 +147,6 @@ def fuse_tier_a_rows(cfg: Dict[str, Any]) -> tuple[List[dict], dict]:
 
         head_box: Optional[List[float]] = None
         if head_detector is not None:
-            frame_key = (take_uid, cam, frame_idx)
             if frame_key not in frame_cache:
                 video_path = take_path / "frame_aligned_videos" / f"{cam}.mp4"
                 cap = cv2.VideoCapture(str(video_path))
@@ -164,6 +193,7 @@ def fuse_tier_a_rows(cfg: Dict[str, Any]) -> tuple[List[dict], dict]:
                 "box_idx": 0,
             }
         )
+        st["kept"] = True
         unique_images.add(rel_image)
         if max_images_n is not None and len(unique_images) >= max_images_n:
             break
@@ -174,6 +204,7 @@ def fuse_tier_a_rows(cfg: Dict[str, Any]) -> tuple[List[dict], dict]:
         "unique_images": len({r["image_path"] for r in rows}),
         "unique_labels": len({r["label_text"] for r in rows}),
         "drop_reasons": dict(drop_reasons),
+        "frame_funnel": summarize_unique_frame_status(frame_status),
         "projector_errors": projector_errors,
         "takes": len({r["take_uid"] for r in rows}),
         "max_tier_a_images": max_images_n,

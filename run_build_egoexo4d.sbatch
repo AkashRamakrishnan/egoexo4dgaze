@@ -9,7 +9,9 @@
 #SBATCH --output=logs/egoexo4d_build_%j.out
 #SBATCH --error=logs/egoexo4d_build_%j.err
 
-# Build Cooking MVP CSV + frames after download (Tier-A fusion, YOLO heads, vocab).
+# Build one scenario's CSV + frames after download (Tier-A fusion, YOLO heads, vocab).
+# All six scenarios:  sbatch run_build_all_scenarios.sbatch
+# Cooking rare labels: re-run this job after min_label_count: 1 (existing JPEGs skipped).
 #
 # Requires: completed 01_download.sh (verify_download.py passes).
 # Optional smoke:  sbatch --export=ALL,CONFIG=configs/cooking_mvp_smoke.yaml run_build_egoexo4d.sbatch
@@ -39,5 +41,8 @@ pip install -e ".[gaze]" -q 2>/dev/null || pip install -e . -q
 ./scripts/05_precompute_embeddings.sh
 
 python scripts/04_visualize.py --total 40 --config "$CONFIG" || true
+
+# Refresh report so viz_* dirs are included in extracted disk stats.
+python scripts/07_final_report.py --config "$CONFIG" --skip-raw-frames
 
 echo "Build job complete."

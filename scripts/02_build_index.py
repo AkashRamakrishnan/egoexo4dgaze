@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build cooking take manifest and Relations frame index."""
+"""Build scenario take manifest and Relations frame index."""
 
 from __future__ import annotations
 

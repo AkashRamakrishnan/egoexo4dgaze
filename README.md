@@ -1,6 +1,10 @@
 # egoexo4d
 
-Build a **Cooking-only**, **exocentric**, **Tier-A** (gaze inside Relations mask) dataset compatible with [GazeDETR](../GazeDETR)'s GazeFollow CSV contract.
+Build **exocentric**, **Tier-A** (gaze inside Relations mask) datasets for every Ego-Exo4D Relations scenario, compatible with [GazeDETR](../GazeDETR)'s GazeFollow CSV contract.
+
+Scenarios: **Cooking**, **Health**, **Bike Repair**, **Music**, **Basketball**, **Soccer**. Cooking is the default config; the others share the same raw dump and write to `data_<slug>/`.
+
+**Labels:** every object label is kept (`filters.min_label_count: 1`). An earlier Cooking build that dropped labels with fewer than 5 rows cannot recover those labels from the pruned CSV — re-run the Cooking **build** (not download). Fusion re-reads Relations + gaze; existing JPEGs are skipped.
 
 ## Prerequisites
 
@@ -18,71 +22,75 @@ Optional: `yolov8n.pt` is fetched automatically by Ultralytics on first head-det
 
 ## Quick start
 
-### 1. Download Ego-Exo4D (Cooking Relations + takes)
+### 1. Download Ego-Exo4D (Relations + takes)
+
+Shared dump (`EGOEXO_ROOT`). Relations train/val JSON is downloaded once; media is fetched per scenario UID list (resume-safe).
 
 ```bash
 EGOEXO_ROOT=./_downloads/egoexo4d ./scripts/01_download.sh
 python scripts/verify_download.py   # optional sanity check
 ```
 
-Cluster:
+All six scenarios on the cluster (Cooking is mostly a no-op if that dump is already complete):
 
 ```bash
 export EGOEXO_ROOT=/path/with/disk/egoexo4d
-sbatch run_download_egoexo4d.sbatch
+sbatch run_download_all_scenarios.sbatch
+```
+
+One scenario:
+
+```bash
+CONFIG=configs/health.yaml ./scripts/01_download.sh
+# or
+./scripts/01_download.sh --scenario bike_repair
 ```
 
 Gaze projection needs Aria VRS factory calib (`aria01_noimagestreams.vrs`). That is **`--parts take_vrs_noimagestream`**, not `--parts takes` (MP4s only). If videos/gaze/trajectory are already on disk:
 
 ```bash
-sbatch --export=ALL,DOWNLOAD_ARGS=--vrs-only run_download_egoexo4d.sbatch
+sbatch --export=ALL,DOWNLOAD_ARGS=--vrs-only run_download_all_scenarios.sbatch
 ```
 
-For a single-take smoke test after the main download:
-
-```bash
-COOKING_UID=<take_uid> EGOEXO_ROOT=./_downloads/egoexo4d ./scripts/01_download.sh --smoke
-```
-
-Edit `egoexo_root` in `configs/cooking_mvp.yaml` if your download root differs.
+Edit `egoexo_root` in the scenario YAML if your download root differs.
 
 ### 2–3. Index + build dataset
+
+Cooking (also recovers previously pruned rare labels):
 
 ```bash
 ./scripts/run_after_download.sh
 ```
 
-Or smoke (one take, output under `data_smoke/`):
+All scenarios (task 0 = Cooking rebuild):
+
+```bash
+sbatch run_build_all_scenarios.sbatch
+```
+
+One other scenario:
+
+```bash
+CONFIG=configs/soccer.yaml ./scripts/run_after_download.sh
+```
+
+Smoke (one Cooking take, output under `data_smoke/`):
 
 ```bash
 CONFIG=configs/cooking_mvp_smoke.yaml ./scripts/run_after_download.sh
 ```
 
-Cluster build (GPU for YOLO head boxes):
-
-```bash
-sbatch run_build_egoexo4d.sbatch
-```
-
-`run_after_download.sh` runs index + Tier-A fusion + export + splits + vocab + RoBERTa embeddings.
-
-Manual steps equivalent to the script:
-
-```bash
-python scripts/02_build_index.py
-python scripts/03_build_dataset.py
-./scripts/05_precompute_embeddings.sh
-```
-
-Outputs:
+`run_after_download.sh` runs index + Tier-A fusion + export + splits + vocab + RoBERTa embeddings + a final disk/frame report (`scripts/07_final_report.py`).
 
 | Path | Description |
 |------|-------------|
-| `data/images/` | Exocentric JPEG frames |
-| `data/annotations/train_verified.csv` | GazeFollow-style rows |
-| `data/annotations/{train,val,test}_split.csv` | Image-level splits |
-| `data/vocab2id.json` | Label vocabulary |
-| `data/manifests/build_stats.json` | Pipeline statistics |
+| `data/images/` (or `data_<slug>/images/`) | Exocentric JPEG frames |
+| `…/annotations/train_verified.csv` | GazeFollow-style rows |
+| `…/annotations/{train,val,test}_split.csv` | Image-level splits |
+| `…/vocab2id.json` | Label vocabulary |
+| `…/manifests/build_stats.json` | Pipeline statistics |
+| `…/manifests/final_report.json` | Disk, frame funnel, CSV/split/vocab summary |
+| `…/manifests/final_report.txt` | Human-readable copy of the same report |
 
 ### 4. RoBERTa vocab embeddings (for GazeDETR retrieval)
 
@@ -92,10 +100,13 @@ python ../GazeDETR/scripts/precompute_vocab_roberta_embeddings.py \
   --output ./data/label-embeds/vocab_roberta_embeddings.pt
 ```
 
+Point `--vocab_path` at `data_<slug>/vocab2id.json` for non-Cooking builds.
+
 ### 5. Visual QA
 
 ```bash
 python scripts/04_visualize.py --total 40
+CONFIG=configs/health.yaml python scripts/04_visualize.py --total 40 --config configs/health.yaml
 ```
 
 ## GazeDETR training
@@ -112,22 +123,24 @@ Cluster: `sbatch run_egoexo4d_retrieval.sbatch`
 
 ## Pipeline overview
 
-1. Filter **Cooking** takes (`parent_task_id: 1000`) present in Relations train/val JSON
+1. Filter scenario takes (`parent_task_id` 1000/2000/4000/5000/6000/8000) present in Relations train/val JSON
 2. Index exocentric Relations masks (`cam01`–`cam05`, ~1 fps frame keys)
 3. Project MPS eye gaze to exo via `projectaria_tools`
 4. **Tier-A**: keep rows where gaze pixel falls inside decoded mask
 5. Estimate head boxes with YOLO person detections (upper-body crop)
-6. Export frames + GazeFollow CSV + image-level splits + vocab
+6. Export frames + GazeFollow CSV + image-level splits + vocab (all labels)
 
 ## Config
 
-See [`configs/cooking_mvp.yaml`](configs/cooking_mvp.yaml). Key knobs:
+See [`configs/cooking_mvp.yaml`](configs/cooking_mvp.yaml) and `configs/{health,bike_repair,music,basketball,soccer}.yaml`. Key knobs:
 
+- `scenario.slug` / `parent_task_id` — which Relations subset
+- `output_root` — extracted dataset (`./data` for Cooking, `./data_<slug>` otherwise)
 - `filters.drop_hand_tracks` — exclude `*hand*` tracks
-- `filters.min_label_count` — drop rare labels before CSV export
+- `filters.min_label_count` — `1` keeps rare labels (set higher only if you want to drop them)
 - `build.max_takes` — limit takes for smoke tests (`1`)
 - `build.skip_head_detection` — skip YOLO (uses placeholder head boxes)
 
 ## Target scale
 
-Cooking MVP Tier-A: **~15–25k rows**, **~8–15k** unique exo frames (depends on download coverage and MPS availability).
+Cooking MVP Tier-A: **~15–25k rows**, **~8–15k** unique exo frames (depends on download coverage and MPS availability). Other scenarios vary with take count.

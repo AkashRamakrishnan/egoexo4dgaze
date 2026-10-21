@@ -77,3 +77,19 @@ def relations_path(cfg: Dict[str, Any], split: str) -> Path:
 
 def takes_json_path(cfg: Dict[str, Any]) -> Path:
     return egoexo_root(cfg) / "takes.json"
+
+
+def takes_manifest_path(cfg: Dict[str, Any]) -> Path:
+    """Write path for the selected-takes manifest (``scenario_takes.json``)."""
+    return manifests_dir(cfg) / "scenario_takes.json"
+
+
+def resolve_takes_manifest(cfg: Dict[str, Any]) -> Path:
+    """Read path: ``scenario_takes.json``, else Cooking's ``cooking_takes.json``."""
+    preferred = takes_manifest_path(cfg)
+    if preferred.exists():
+        return preferred
+    legacy = manifests_dir(cfg) / "cooking_takes.json"
+    if legacy.exists():
+        return legacy
+    return preferred

@@ -82,7 +82,7 @@ def write_train_verified_csv(rows: List[dict], out_path: Path) -> Path:
 
 
 def export_verified_csv(cfg: Dict[str, Any], rows: List[dict]) -> Path:
-    min_count = int(cfg.get("filters", {}).get("min_label_count", 5))
+    min_count = int(cfg.get("filters", {}).get("min_label_count", 1))
     pruned, prune_stats = prune_rare_labels(rows, min_count)
     out_path = annotations_dir(cfg) / "train_verified.csv"
     write_train_verified_csv(pruned, out_path)
