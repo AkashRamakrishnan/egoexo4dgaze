@@ -91,6 +91,7 @@ CONFIG=configs/cooking_mvp_smoke.yaml ./scripts/run_after_download.sh
 | `…/manifests/build_stats.json` | Pipeline statistics |
 | `…/manifests/final_report.json` | Disk, frame funnel, CSV/split/vocab summary |
 | `…/manifests/final_report.txt` | Human-readable copy of the same report |
+| `combined_report.{txt,html,json}` | Per-scenario + overall tables (`scripts/08_combined_report.py`) |
 
 ### 4. RoBERTa vocab embeddings (for GazeDETR retrieval)
 
@@ -102,7 +103,23 @@ python ../GazeDETR/scripts/precompute_vocab_roberta_embeddings.py \
 
 Point `--vocab_path` at `data_<slug>/vocab2id.json` for non-Cooking builds.
 
-### 5. Visual QA
+### 5. Combined overview (all scenarios)
+
+After the six builds finish:
+
+```bash
+python scripts/08_combined_report.py
+```
+
+Prints per-scenario and overall tables, and writes `combined_report.txt`, `combined_report.html`, and `combined_report.json`. Open the HTML file for a dashboard. Scenarios without `final_report.json` show as missing and are omitted from totals.
+
+Rebuild each scenario report from CSVs first (optional):
+
+```bash
+python scripts/08_combined_report.py --rebuild
+```
+
+### 6. Visual QA
 
 ```bash
 python scripts/04_visualize.py --total 40
