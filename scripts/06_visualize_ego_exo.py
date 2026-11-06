@@ -40,6 +40,16 @@ GAZE_COLOR = (0, 220, 80)
 TEXT_BG = (20, 20, 20)
 TEXT_FG = (245, 245, 245)
 PANEL_BG = (12, 12, 12)
+MASK_PALETTE = (
+    (255, 60, 60),
+    (50, 120, 255),
+    (255, 160, 0),
+    (190, 70, 220),
+    (0, 190, 200),
+    (255, 220, 0),
+    (40, 180, 90),
+    (255, 90, 160),
+)
 
 _PROJECTORS: dict[str, object] = {}
 
@@ -80,14 +90,25 @@ def draw_gaze(draw: ImageDraw.ImageDraw, x: float, y: float, line_w: int) -> Non
     draw.line((x, y - arm, x, y + arm), fill=GAZE_COLOR, width=line_w)
 
 
-def draw_label_box(draw: ImageDraw.ImageDraw, xy, text: str, font, line_w: int) -> None:
+def draw_label_box(
+    draw: ImageDraw.ImageDraw,
+    xy,
+    text: str,
+    font,
+    line_w: int,
+    color: tuple[int, int, int] = OBJ_COLOR,
+    *,
+    emphasize: bool = False,
+) -> None:
     x1, y1, x2, y2 = xy
-    draw.rectangle((x1, y1, x2, y2), outline=OBJ_COLOR, width=line_w)
+    if emphasize:
+        draw.rectangle((x1, y1, x2, y2), outline=(255, 255, 255), width=line_w + 3)
+    draw.rectangle((x1, y1, x2, y2), outline=color, width=line_w)
     pad = 4
     bbox = draw.textbbox((0, 0), text, font=font)
     tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
     tx, ty = x1, max(0, y1 - th - 2 * pad)
-    draw.rectangle((tx, ty, tx + tw + 2 * pad, ty + th + 2 * pad), fill=OBJ_COLOR)
+    draw.rectangle((tx, ty, tx + tw + 2 * pad, ty + th + 2 * pad), fill=color)
     draw.text((tx + pad, ty + pad), text, fill=(255, 255, 255), font=font)
 
 
@@ -236,10 +257,38 @@ def projector_for(cfg: dict, take_name: str):
     return projector
 
 
-def viz_row_from_record(rec: dict, gaze: tuple[float, float], box: tuple[float, float, float, float]) -> dict:
+def object_from_record(rec: dict, gaze: tuple[float, float]) -> dict | None:
+    mask = encoded_to_mask(rec)
+    if mask is None:
+        return None
+    try:
+        box = mask_to_bbox(mask)
+    except ValueError:
+        return None
+    return {
+        "label_text": rec.get("label_text", ""),
+        "track_name": rec.get("track_name", ""),
+        "box_x1": float(box[0]),
+        "box_y1": float(box[1]),
+        "box_x2": float(box[2]),
+        "box_y2": float(box[3]),
+        "encoded_mask": rec.get("encoded_mask"),
+        "mask_width": rec.get("mask_width"),
+        "mask_height": rec.get("mask_height"),
+        "gaze_hit": point_in_mask(float(gaze[0]), float(gaze[1]), mask),
+    }
+
+
+def viz_row_from_frame(
+    recs: list[dict],
+    gaze: tuple[float, float],
+    objects: list[dict],
+) -> dict:
+    rec = recs[0]
     take_uid = str(rec["take_uid"])
     cam = str(rec["cam"])
     frame_idx = int(rec["frame_idx"])
+    primary = next((obj for obj in objects if obj.get("gaze_hit")), objects[0])
     return {
         "take_uid": take_uid,
         "take_name": rec["take_name"],
@@ -248,24 +297,29 @@ def viz_row_from_record(rec: dict, gaze: tuple[float, float], box: tuple[float, 
         "image_path": f"{take_uid}/{cam}/{frame_idx:06d}.jpg",
         "gaze_x": float(gaze[0]),
         "gaze_y": float(gaze[1]),
-        "box_x1": float(box[0]),
-        "box_y1": float(box[1]),
-        "box_x2": float(box[2]),
-        "box_y2": float(box[3]),
-        "label_text": rec.get("label_text", ""),
-        "track_name": rec.get("track_name", ""),
-        "encoded_mask": rec.get("encoded_mask"),
-        "mask_width": rec.get("mask_width"),
-        "mask_height": rec.get("mask_height"),
+        "box_x1": primary["box_x1"],
+        "box_y1": primary["box_y1"],
+        "box_x2": primary["box_x2"],
+        "box_y2": primary["box_y2"],
+        "label_text": ", ".join(
+            str(obj.get("label_text", "")) for obj in objects if obj.get("label_text")
+        ),
+        "track_name": primary.get("track_name", ""),
+        "encoded_mask": primary.get("encoded_mask"),
+        "mask_width": primary.get("mask_width"),
+        "mask_height": primary.get("mask_height"),
+        "objects": objects,
+        "gaze_in_any_mask": any(obj.get("gaze_hit") for obj in objects),
     }
 
 
-def classify_record(
-    rec: dict,
+def classify_frame(
+    recs: list[dict],
     projector,
     used_frames: set[tuple],
     gaze_cache: dict[tuple, tuple[float, float] | None],
 ) -> tuple[dict, bool, tuple] | None:
+    rec = recs[0]
     cam = str(rec["cam"])
     frame_idx = int(rec["frame_idx"])
     frame_key = (str(rec["take_uid"]), cam, frame_idx)
@@ -279,15 +333,15 @@ def classify_record(
     gaze = gaze_cache[frame_key]
     if gaze is None:
         return None
-    mask = encoded_to_mask(rec)
-    if mask is None:
+    objects = []
+    for rec in recs:
+        obj = object_from_record(rec, gaze)
+        if obj is not None:
+            objects.append(obj)
+    if not objects:
         return None
-    try:
-        box = mask_to_bbox(mask)
-    except ValueError:
-        return None
-    hit = point_in_mask(float(gaze[0]), float(gaze[1]), mask)
-    return viz_row_from_record(rec, gaze, box), hit, frame_key
+    row = viz_row_from_frame(recs, gaze, objects)
+    return row, bool(row["gaze_in_any_mask"]), frame_key
 
 
 def sample_in_out_for_scenario(
@@ -296,13 +350,17 @@ def sample_in_out_for_scenario(
     n: int,
     rng: random.Random,
 ) -> tuple[list[dict], list[dict]] | None:
-    """n gaze-in-mask and n gaze-out-of-mask rows, preferring distinct takes."""
+    """n frames with gaze in any mask and n with gaze in none, preferring distinct takes."""
     if not records:
         return None
-    by_take: dict[str, list[dict]] = defaultdict(list)
+    frames_by_take: dict[str, dict[tuple, list[dict]]] = defaultdict(dict)
+    take_name_by_uid: dict[str, str] = {}
     for rec in records:
-        by_take[str(rec["take_uid"])].append(rec)
-    take_uids = list(by_take)
+        uid = str(rec["take_uid"])
+        frame_key = (uid, str(rec["cam"]), int(rec["frame_idx"]))
+        frames_by_take[uid].setdefault(frame_key, []).append(rec)
+        take_name_by_uid[uid] = str(rec["take_name"])
+    take_uids = list(frames_by_take)
     rng.shuffle(take_uids)
 
     inside: list[dict] = []
@@ -312,8 +370,8 @@ def sample_in_out_for_scenario(
     gaze_cache: dict[tuple, tuple[float, float] | None] = {}
     projectors: dict[str, object | None] = {}
 
-    def projector_for_records(recs: list[dict]):
-        take_name = str(recs[0]["take_name"])
+    def projector_for_uid(uid: str):
+        take_name = take_name_by_uid[uid]
         if take_name not in projectors:
             try:
                 projectors[take_name] = projector_for(cfg, take_name)
@@ -323,14 +381,14 @@ def sample_in_out_for_scenario(
         return projectors[take_name]
 
     def scan_take(uid: str) -> tuple[tuple[dict, tuple] | None, tuple[dict, tuple] | None]:
-        recs = list(by_take[uid])
-        rng.shuffle(recs)
-        projector = projector_for_records(recs)
+        projector = projector_for_uid(uid)
         if projector is None:
             return None, None
+        frame_items = list(frames_by_take[uid].items())
+        rng.shuffle(frame_items)
         found_in = found_out = None
-        for rec in recs:
-            packed = classify_record(rec, projector, used_frames, gaze_cache)
+        for _key, recs in frame_items:
+            packed = classify_frame(recs, projector, used_frames, gaze_cache)
             if packed is None:
                 continue
             row, hit, key = packed
@@ -414,27 +472,68 @@ def render_pair(
 
     projector = projector_for(cfg, row["take_name"])
 
+    objects = list(row.get("objects") or [])
+    if not objects:
+        objects = [
+            {
+                "label_text": row.get("label_text", ""),
+                "box_x1": row["box_x1"],
+                "box_y1": row["box_y1"],
+                "box_x2": row["box_x2"],
+                "box_y2": row["box_y2"],
+                "encoded_mask": row.get("encoded_mask"),
+                "mask_width": row.get("mask_width"),
+                "mask_height": row.get("mask_height"),
+                "track_name": row.get("track_name", ""),
+                "gaze_hit": True,
+            }
+        ]
+
     if overlay_object_mask:
-        mask = mask_for_row(row, mask_index or {})
-        if mask is not None:
-            exo = overlay_mask(exo, mask)
+        for i, obj in enumerate(objects):
+            color = MASK_PALETTE[i % len(MASK_PALETTE)]
+            mask = encoded_to_mask(obj)
+            if mask is None:
+                mask = mask_for_row(
+                    {
+                        **row,
+                        "track_name": obj.get("track_name", row.get("track_name", "")),
+                        "encoded_mask": obj.get("encoded_mask"),
+                        "mask_width": obj.get("mask_width"),
+                        "mask_height": obj.get("mask_height"),
+                    },
+                    mask_index or {},
+                )
+            if mask is not None:
+                alpha = 0.46 if obj.get("gaze_hit") else 0.30
+                exo = overlay_mask(exo, mask, color, alpha)
 
     line_w = max(2, int(min(exo.size) * 0.005))
     font = load_font(max(16, int(min(exo.size) * 0.028)))
     small = load_font(max(14, int(min(exo.size) * 0.022)))
-    box = (
-        float(row["box_x1"]),
-        float(row["box_y1"]),
-        float(row["box_x2"]),
-        float(row["box_y2"]),
-    )
 
     exo_draw = ImageDraw.Draw(exo)
+    for i, obj in enumerate(objects):
+        color = MASK_PALETTE[i % len(MASK_PALETTE)]
+        box = (
+            float(obj["box_x1"]),
+            float(obj["box_y1"]),
+            float(obj["box_x2"]),
+            float(obj["box_y2"]),
+        )
+        if draw_label:
+            draw_label_box(
+                exo_draw,
+                box,
+                str(obj.get("label_text", "")),
+                font,
+                line_w,
+                color,
+                emphasize=bool(obj.get("gaze_hit")),
+            )
+        else:
+            exo_draw.rectangle(box, outline=color, width=line_w)
     draw_gaze(exo_draw, float(row["gaze_x"]), float(row["gaze_y"]), line_w)
-    if draw_label:
-        draw_label_box(exo_draw, box, str(row.get("label_text", "")), font, line_w)
-    else:
-        exo_draw.rectangle(box, outline=OBJ_COLOR, width=line_w)
 
     ego_draw = ImageDraw.Draw(ego)
     ego_sub = ego_note
@@ -555,9 +654,11 @@ def run_paper_scenario(args, cfg: dict, out_dir: Path) -> int:
                     mask_index={},
                 )
                 n_ok += 1
+                n_obj = len(row.get("objects") or [])
                 print(
                     f"[viz] {slug}/{bucket}/{out_name}  "
-                    f"{row.get('label_text', '')}  {row.get('take_name', '')}"
+                    f"{row.get('label_text', '')}  "
+                    f"n_masks={n_obj}  {row.get('take_name', '')}"
                 )
             except Exception as exc:
                 failed.append((str(out_path), str(exc)))
