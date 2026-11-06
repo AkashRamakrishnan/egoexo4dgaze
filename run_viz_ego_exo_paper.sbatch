@@ -10,14 +10,15 @@
 #SBATCH --error=logs/egoexo4d_viz_paper_%j.err
 
 # Paper-style ego|exo samples: no captions, matched height, object mask + bbox
-# + label. For each take: PER_BUCKET gaze-in-mask and PER_BUCKET gaze-out-of-mask.
-# Needs take mp4s, MPS, and manifests/frame_index.parquet.
+# + label. For each scenario: PER_BUCKET gaze-in-mask and PER_BUCKET gaze-out-of-mask
+# (distinct takes when possible). Needs take mp4s, MPS, and each scenario's
+# manifests/frame_index.parquet.
 #
 #   sbatch --export=ALL,EGOEXO_ROOT=/deepstore/datasets/dmb/ComputerVision/information_retrieval/egotogaze/egoexo4d_raw \
 #     run_viz_ego_exo_paper.sbatch
 #
-# Limit takes / change counts:
-#   sbatch --export=ALL,EGOEXO_ROOT=...,TAKES=12,PER_BUCKET=10,OUT=./viz_ego_exo_paper \
+# One scenario only:
+#   sbatch --export=ALL,EGOEXO_ROOT=...,ALL_SCENARIOS=0,CONFIG=configs/cooking_mvp.yaml \
 #     run_viz_ego_exo_paper.sbatch
 
 hostname
@@ -31,28 +32,24 @@ export PYTHONUNBUFFERED=1
 mkdir -p logs
 cd "$SLURM_SUBMIT_DIR"
 
-CONFIG="${CONFIG:-configs/cooking_mvp.yaml}"
 EGOEXO_ROOT="${EGOEXO_ROOT:-/deepstore/datasets/dmb/ComputerVision/information_retrieval/egotogaze/egoexo4d_raw}"
 PER_BUCKET="${PER_BUCKET:-10}"
 OUT="${OUT:-./viz_ego_exo_paper}"
-export CONFIG
+ALL_SCENARIOS="${ALL_SCENARIOS:-1}"
 export EGOEXO_ROOT
 
-echo "CONFIG=$CONFIG"
 echo "EGOEXO_ROOT=$EGOEXO_ROOT"
-echo "EGOEXO_OUTPUT_ROOT=${EGOEXO_OUTPUT_ROOT:-<from yaml>}"
-echo "TAKES=${TAKES:-all} PER_BUCKET=$PER_BUCKET OUT=$OUT"
-
-pip install -e ".[gaze]" -q 2>/dev/null || pip install -e . -q
+echo "ALL_SCENARIOS=$ALL_SCENARIOS PER_BUCKET=$PER_BUCKET OUT=$OUT"
 
 ARGS=(
-  --config "$CONFIG"
   --paper
   --per-bucket "$PER_BUCKET"
   --out "$OUT"
 )
-if [[ -n "${TAKES:-}" ]]; then
-  ARGS+=(--takes "$TAKES")
+if [[ "$ALL_SCENARIOS" == "1" ]]; then
+  ARGS+=(--all-scenarios)
+else
+  ARGS+=(--config "${CONFIG:-configs/cooking_mvp.yaml}")
 fi
 
 python scripts/06_visualize_ego_exo.py "${ARGS[@]}"

@@ -2,10 +2,10 @@
 """Side-by-side ego + exo QA plots for random Tier-A labeled images.
 
 Paper figures (no captions, matched height, object mask + bbox + label,
-10 gaze-in-mask and 10 gaze-out-of-mask samples per take):
+10 gaze-in-mask and 10 gaze-out-of-mask samples per scenario):
 
-    python scripts/06_visualize_ego_exo.py --config configs/cooking_mvp.yaml \\
-        --paper --per-bucket 10 --out ./viz_ego_exo_paper
+    python scripts/06_visualize_ego_exo.py --paper --all-scenarios \\
+        --per-bucket 10 --out ./viz_ego_exo_paper
 """
 
 from __future__ import annotations
@@ -42,6 +42,15 @@ TEXT_FG = (245, 245, 245)
 PANEL_BG = (12, 12, 12)
 
 _PROJECTORS: dict[str, object] = {}
+
+PAPER_SCENARIO_CONFIGS = (
+    "configs/cooking_mvp.yaml",
+    "configs/health.yaml",
+    "configs/bike_repair.yaml",
+    "configs/music.yaml",
+    "configs/basketball.yaml",
+    "configs/soccer.yaml",
+)
 
 
 def load_font(size: int):
@@ -251,68 +260,126 @@ def viz_row_from_record(rec: dict, gaze: tuple[float, float], box: tuple[float, 
     }
 
 
-def sample_in_out_for_take(
+def classify_record(
+    rec: dict,
+    projector,
+    used_frames: set[tuple],
+    gaze_cache: dict[tuple, tuple[float, float] | None],
+) -> tuple[dict, bool, tuple] | None:
+    cam = str(rec["cam"])
+    frame_idx = int(rec["frame_idx"])
+    frame_key = (str(rec["take_uid"]), cam, frame_idx)
+    if frame_key in used_frames:
+        return None
+    if frame_key not in gaze_cache:
+        try:
+            gaze_cache[frame_key] = projector.project_gaze(cam, frame_idx)
+        except Exception:
+            gaze_cache[frame_key] = None
+    gaze = gaze_cache[frame_key]
+    if gaze is None:
+        return None
+    mask = encoded_to_mask(rec)
+    if mask is None:
+        return None
+    try:
+        box = mask_to_bbox(mask)
+    except ValueError:
+        return None
+    hit = point_in_mask(float(gaze[0]), float(gaze[1]), mask)
+    return viz_row_from_record(rec, gaze, box), hit, frame_key
+
+
+def sample_in_out_for_scenario(
     records: list[dict],
     cfg: dict,
     n: int,
     rng: random.Random,
 ) -> tuple[list[dict], list[dict]] | None:
-    """Return n gaze-in-mask and n gaze-out-of-mask rows, or None if a take is short."""
+    """n gaze-in-mask and n gaze-out-of-mask rows, preferring distinct takes."""
     if not records:
         return None
-    take_name = str(records[0]["take_name"])
-    try:
-        projector = projector_for(cfg, take_name)
-    except Exception as exc:
-        print(f"[viz] skip {take_name}: projector failed ({exc})")
-        return None
+    by_take: dict[str, list[dict]] = defaultdict(list)
+    for rec in records:
+        by_take[str(rec["take_uid"])].append(rec)
+    take_uids = list(by_take)
+    rng.shuffle(take_uids)
 
-    shuffled = list(records)
-    rng.shuffle(shuffled)
     inside: list[dict] = []
     outside: list[dict] = []
-    used: set[tuple] = set()
+    used_frames: set[tuple] = set()
+    used_takes: set[str] = set()
     gaze_cache: dict[tuple, tuple[float, float] | None] = {}
+    projectors: dict[str, object | None] = {}
 
-    for rec in shuffled:
+    def projector_for_records(recs: list[dict]):
+        take_name = str(recs[0]["take_name"])
+        if take_name not in projectors:
+            try:
+                projectors[take_name] = projector_for(cfg, take_name)
+            except Exception as exc:
+                print(f"[viz] skip {take_name}: projector failed ({exc})")
+                projectors[take_name] = None
+        return projectors[take_name]
+
+    def scan_take(uid: str) -> tuple[tuple[dict, tuple] | None, tuple[dict, tuple] | None]:
+        recs = list(by_take[uid])
+        rng.shuffle(recs)
+        projector = projector_for_records(recs)
+        if projector is None:
+            return None, None
+        found_in = found_out = None
+        for rec in recs:
+            packed = classify_record(rec, projector, used_frames, gaze_cache)
+            if packed is None:
+                continue
+            row, hit, key = packed
+            if hit and found_in is None:
+                found_in = (row, key)
+            elif (not hit) and found_out is None:
+                found_out = (row, key)
+            if found_in is not None and found_out is not None:
+                break
+        return found_in, found_out
+
+    for uid in take_uids:
         if len(inside) >= n and len(outside) >= n:
             break
-        cam = str(rec["cam"])
-        frame_idx = int(rec["frame_idx"])
-        frame_key = (cam, frame_idx)
-        if frame_key in used:
+        found_in, found_out = scan_take(uid)
+        options = []
+        if len(inside) < n and found_in is not None:
+            options.append(("in", found_in))
+        if len(outside) < n and found_out is not None:
+            options.append(("out", found_out))
+        if not options:
             continue
-        if frame_key not in gaze_cache:
-            try:
-                gaze_cache[frame_key] = projector.project_gaze(cam, frame_idx)
-            except Exception:
-                gaze_cache[frame_key] = None
-        gaze = gaze_cache[frame_key]
-        if gaze is None:
-            continue
-        mask = encoded_to_mask(rec)
-        if mask is None:
-            continue
-        try:
-            box = mask_to_bbox(mask)
-        except ValueError:
-            continue
-        row = viz_row_from_record(rec, gaze, box)
-        hit = point_in_mask(float(gaze[0]), float(gaze[1]), mask)
-        if hit and len(inside) < n:
+        bucket, (row, key) = rng.choice(options)
+        if bucket == "in":
             inside.append(row)
-            used.add(frame_key)
-        elif (not hit) and len(outside) < n:
+        else:
             outside.append(row)
-            used.add(frame_key)
+        used_frames.add(key)
+        used_takes.add(uid)
 
     if len(inside) < n or len(outside) < n:
-        print(
-            f"[viz] skip {take_name}: in_mask={len(inside)}/{n} "
-            f"out_mask={len(outside)}/{n}"
-        )
+        leftover = [u for u in take_uids if u not in used_takes] + [
+            u for u in take_uids if u in used_takes
+        ]
+        for uid in leftover:
+            if len(inside) >= n and len(outside) >= n:
+                break
+            found_in, found_out = scan_take(uid)
+            if len(inside) < n and found_in is not None and found_in[1] not in used_frames:
+                inside.append(found_in[0])
+                used_frames.add(found_in[1])
+            if len(outside) < n and found_out is not None and found_out[1] not in used_frames:
+                outside.append(found_out[0])
+                used_frames.add(found_out[1])
+
+    if len(inside) < n or len(outside) < n:
+        print(f"[viz] not enough samples: in_mask={len(inside)}/{n} out_mask={len(outside)}/{n}")
         return None
-    return inside, outside
+    return inside[:n], outside[:n]
 
 
 def render_pair(
@@ -443,76 +510,87 @@ def save_row(
     ).save(out_path, quality=92)
 
 
-def run_paper(args, cfg: dict) -> None:
+def scenario_slug(cfg: dict) -> str:
+    return str(cfg.get("scenario", {}).get("slug", "scenario"))
+
+
+def run_paper_scenario(args, cfg: dict, out_dir: Path) -> int:
     parquet = manifests_dir(cfg) / "frame_index.parquet"
+    slug = scenario_slug(cfg)
     if not parquet.exists():
         raise FileNotFoundError(
-            f"Missing {parquet}. Run scripts/02_build_index.py first."
+            f"Missing {parquet} for {slug}. Run scripts/02_build_index.py first."
         )
     import pandas as pd
 
     df = pd.read_parquet(parquet)
     if df.empty:
-        raise RuntimeError("Empty frame_index.parquet")
-
-    by_take: dict[str, list[dict]] = defaultdict(list)
-    take_names: dict[str, str] = {}
-    for rec in df.to_dict(orient="records"):
-        uid = str(rec["take_uid"])
-        by_take[uid].append(rec)
-        take_names[uid] = str(rec["take_name"])
+        raise RuntimeError(f"Empty frame_index.parquet for {slug}")
 
     rng = random.Random(args.seed)
-    take_uids = list(by_take.keys())
-    rng.shuffle(take_uids)
-    if args.takes is not None:
-        take_uids = take_uids[: args.takes]
-
-    out_dir = args.out or (output_root(cfg) / "viz_ego_exo_paper")
-    out_dir.mkdir(parents=True, exist_ok=True)
-
     n = args.per_bucket
-    used_takes = 0
+    sampled = sample_in_out_for_scenario(df.to_dict(orient="records"), cfg, n, rng)
+    if sampled is None:
+        raise RuntimeError(
+            f"{slug}: could not find {n} gaze-in-mask and {n} gaze-out-of-mask frames."
+        )
+    inside, outside = sampled
     n_ok = 0
     failed: list[tuple[str, str]] = []
-
-    for uid in take_uids:
-        sampled = sample_in_out_for_take(by_take[uid], cfg, n, rng)
-        if sampled is None:
-            continue
-        inside, outside = sampled
-        used_takes += 1
-        take_name = take_names[uid]
-        take_dir_out = out_dir / take_name
-        print(f"[viz] {take_name}: {n} in_mask + {n} out_mask")
-        for bucket, rows in (("in_mask", inside), ("out_mask", outside)):
-            for i, row in enumerate(rows, start=1):
-                out_name = f"{i:02d}_{row['cam']}_{int(row['frame_idx']):06d}.jpg"
-                out_path = take_dir_out / bucket / out_name
-                try:
-                    save_row(
-                        row,
-                        cfg,
-                        out_path,
-                        no_captions=True,
-                        draw_label=not args.no_label,
-                        match_height=True,
-                        overlay_object_mask=True,
-                        mask_index={},
-                    )
-                    n_ok += 1
-                    print(f"[viz] {take_name}/{bucket}/{out_name}  {row.get('label_text', '')}")
-                except Exception as exc:
-                    failed.append((str(out_path), str(exc)))
-                    print(f"[viz] FAIL {out_path}: {exc}")
-
-    if used_takes == 0:
-        raise RuntimeError(
-            f"No take had {n} gaze-in-mask and {n} gaze-out-of-mask frames."
-        )
+    print(f"[viz] {slug}: {len(inside)} in_mask + {len(outside)} out_mask -> {out_dir}")
+    for bucket, rows in (("in_mask", inside), ("out_mask", outside)):
+        for i, row in enumerate(rows, start=1):
+            uid8 = str(row.get("take_uid", "take"))[:8]
+            out_name = f"{i:02d}_{uid8}_{row['cam']}_{int(row['frame_idx']):06d}.jpg"
+            out_path = out_dir / bucket / out_name
+            try:
+                save_row(
+                    row,
+                    cfg,
+                    out_path,
+                    no_captions=True,
+                    draw_label=not args.no_label,
+                    match_height=True,
+                    overlay_object_mask=True,
+                    mask_index={},
+                )
+                n_ok += 1
+                print(
+                    f"[viz] {slug}/{bucket}/{out_name}  "
+                    f"{row.get('label_text', '')}  {row.get('take_name', '')}"
+                )
+            except Exception as exc:
+                failed.append((str(out_path), str(exc)))
+                print(f"[viz] FAIL {out_path}: {exc}")
     if failed:
-        raise RuntimeError(f"{len(failed)} plots failed: {failed[:3]}")
-    print(f"Saved {n_ok} plots from {used_takes} takes -> {out_dir}")
+        raise RuntimeError(f"{slug}: {len(failed)} plots failed: {failed[:3]}")
+    return n_ok
+
+
+def run_paper(args, cfg: dict) -> None:
+    base_out = args.out or (Path("./viz_ego_exo_paper").resolve())
+    if args.all_scenarios:
+        configs = [ROOT / rel for rel in PAPER_SCENARIO_CONFIGS]
+    else:
+        configs = [Path(cfg["_config_path"])]
+
+    n_ok = 0
+    errors: list[str] = []
+    for path in configs:
+        one = load_config(path)
+        slug = scenario_slug(one)
+        out_dir = base_out / slug
+        try:
+            n_ok += run_paper_scenario(args, one, out_dir)
+        except Exception as exc:
+            msg = f"{slug}: {exc}"
+            errors.append(msg)
+            print(f"[viz] FAIL {msg}")
+            if not args.all_scenarios:
+                raise
+    if args.all_scenarios and n_ok == 0:
+        raise RuntimeError("No scenario produced plots: " + "; ".join(errors[:3]))
+    print(f"Saved {n_ok} plots -> {base_out}")
 
 
 def run_qa(args, cfg: dict) -> None:
@@ -585,15 +663,24 @@ def main() -> None:
     parser.add_argument(
         "--paper",
         action="store_true",
-        help="No captions, match height, mask + bbox + label, 10 in/10 out per take.",
+        help="No captions, match height, mask + bbox + label, 10 in/10 out per scenario.",
+    )
+    parser.add_argument(
+        "--all-scenarios",
+        action="store_true",
+        help="Run --paper on cooking, health, bike_repair, music, basketball, soccer.",
     )
     parser.add_argument("--no-text", action="store_true", help="Drop captions/header.")
     parser.add_argument("--no-label", action="store_true", help="Drop object-name chip.")
     parser.add_argument("--match-height", action="store_true")
     parser.add_argument("--overlay-mask", action="store_true")
     parser.add_argument("--distinct-takes", action="store_true")
-    parser.add_argument("--per-bucket", type=int, default=10, help="In-mask and out-of-mask count per take.")
-    parser.add_argument("--takes", type=int, default=None, help="Max takes for --paper (default: all that qualify).")
+    parser.add_argument(
+        "--per-bucket",
+        type=int,
+        default=10,
+        help="In-mask and out-of-mask count per scenario (default 10).",
+    )
     args = parser.parse_args()
 
     cfg = load_config(args.config)
